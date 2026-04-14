@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Console V1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Poppins', sans-serif; background: #f8fafc; color: #0f172a; }
+        .grid-anim { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease; opacity: 0; }
+        .grid-anim.open { grid-template-rows: 1fr; opacity: 1; }
+        .grid-inner { overflow: hidden; }
+        .glass { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(12px); }
+        .arrow { transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .rotate { transform: rotate(180deg); }
+        .btn-copy { @apply text-[9px] font-bold px-4 py-1.5 rounded-full transition-all border outline-none active:scale-90 uppercase tracking-tighter; }
+        .copy-animation { animation: bounce-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        @keyframes bounce-in { 0% { transform: scale(0.95); opacity: 0.8; } 50% { transform: scale(1.05); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+        .toolbar-hidden { opacity: 0; transform: scale(0.9) translateY(10px); transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); pointer-events: none; }
+        .toolbar-show { opacity: 1; transform: scale(1) translateY(0); pointer-events: auto; }
+    </style>
+</head>
+<body class="p-4 pb-12">
+    <div class="max-w-xl mx-auto space-y-4">
+        <div class="bg-blue-600 p-6 rounded-[2.5rem] text-white shadow-2xl flex justify-between items-center border-b-4 border-blue-800">
+            <div><h1 class="text-xl font-bold tracking-tight uppercase">Nexus Console V1</h1><p id="uptime" class="text-[10px] opacity-60 font-medium tracking-widest uppercase tracking-tighter">Initializing</p></div>
+            <div class="bg-black/20 px-4 py-2 rounded-full flex items-center gap-2"><span id="ping-text" class="text-xs font-mono font-bold">0ms</span><div id="status-dot" class="w-2.5 h-2.5 bg-gray-500 rounded-full"></div></div>
+        </div>
+        <div id="sections-container"></div>
+    </div>
+    <script>
+        const API = window.location.origin + '/api';
+        const sections = [
+            { id: 'ai', name: 'AI', tools: [{ id: 'text2img', label: 'Text To Image', hint: 'Input prompt text...' }] },
+            { id: 'maker', name: 'Maker', tools: [{ id: 'brat', label: 'Brat Maker', hint: 'Input text...' }, { id: 'deepnude', label: 'Deepnude Maker', hint: 'Input image url...' }] },
+            { id: 'dl', name: 'Downloader', tools: [{ id: 'tiktok', label: 'TikTok DL', hint: 'Input tiktok url...' }, { id: 'play', label: 'Spotify Play', hint: 'Input song title...' }] },
+            { id: 'stalk', name: 'Stalk', tools: [{ id: 'stalkff', label: 'Free Fire Stalk', hint: 'Input player id...' }] }
+        ];
+
+        const container = document.getElementById('sections-container');
+        sections.forEach(sec => {
+            const html = `
+                <div class="glass rounded-[2.5rem] shadow-sm border border-blue-100 overflow-hidden mb-4">
+                    <button onclick="toggleSection('sec-${sec.id}')" class="w-full p-6 flex justify-between items-center outline-none">
+                        <span class="font-bold text-blue-900 text-sm uppercase">${sec.name}</span>
+                        <span id="arrow-sec-${sec.id}" class="arrow text-blue-400">▼</span>
+                    </button>
+                    <div id="sec-${sec.id}" class="grid-anim">
+                        <div class="grid-inner px-6 space-y-6 pb-6">
+                            ${sec.tools.map(tool => `
+                                <div class="space-y-2">
+                                    <label class="text-[10px] font-black text-blue-400 uppercase ml-1">${tool.label}</label>
+                                    <div class="flex gap-2">
+                                        <input id="${tool.id}-input" type="text" placeholder="${tool.hint}" class="w-full p-4 rounded-full bg-blue-50/50 outline-none ring-1 ring-blue-100 focus:ring-2 focus:ring-blue-500 text-sm transition-all shadow-inner placeholder:italic placeholder:opacity-50">
+                                        <button id="btn-${tool.id}" onclick="runApi('${tool.id}')" class="bg-blue-600 text-white px-6 rounded-full font-bold text-[9px] uppercase active:scale-90 transition-all shadow-lg shadow-blue-200">Execute</button>
+                                    </div>
+                                    <div id="grid-res-${tool.id}" class="grid-anim">
+                                        <div class="grid-inner mt-2">
+                                            <div id="toolbar-${tool.id}" class="toolbar-hidden flex gap-2 mb-3 ml-2">
+                                                <button onclick="copyData('${tool.id}', 'header')" id="cp-head-${tool.id}" class="btn-copy bg-white text-gray-400 border-gray-100">Header</button>
+                                                <button onclick="copyData('${tool.id}', 'curl')" id="cp-curl-${tool.id}" class="btn-copy bg-white text-gray-400 border-gray-100">cURL</button>
+                                            </div>
+                                            <div class="p-2 bg-white rounded-[2rem] border-2 border-blue-50 min-h-[60px] shadow-sm overflow-hidden" id="res-${tool.id}"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>`;
+            container.insertAdjacentHTML('beforeend', html);
+        });
+
+        let lastResponse = {};
+        function toggleSection(id) {
+            sections.forEach(s => {
+                const el = document.getElementById(`sec-${s.id}`);
+                const arrow = document.getElementById(`arrow-sec-${s.id}`);
+                if(`sec-${s.id}` === id) { el.classList.toggle('open'); arrow.classList.toggle('rotate'); }
+                else { el.classList.remove('open'); arrow.classList.remove('rotate'); }
+            });
+        }
+
+        async function runApi(type) {
+            const gridRes = document.getElementById('grid-res-' + type);
+            const resDiv = document.getElementById('res-' + type);
+            const toolbar = document.getElementById('toolbar-' + type);
+            const btn = document.getElementById('btn-' + type);
+            toolbar.classList.remove('toolbar-show');
+            btn.innerText = '...'; btn.disabled = true;
+            gridRes.classList.add('open');
+            resDiv.innerHTML = '<div class="flex justify-center py-10"><div class="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>';
+            try {
+                let p = type === 'stalkff' ? 'id' : type === 'lirik' ? 'lagu' : type === 'deepnude' ? 'url' : type === 'tiktok' ? 'url' : type === 'play' ? 'query' : 'text';
+                let url = `${API}/${type}?${p}=${encodeURIComponent(document.getElementById(type + '-input').value)}`;
+                const response = await fetch(url);
+                lastResponse[type] = { url: url, headers: Object.fromEntries(response.headers.entries()) };
+                
+                if(['brat', 'deepnude', 'text2img'].includes(type)) {
+                    const blob = await response.blob();
+                    resDiv.innerHTML = `<img src="${URL.createObjectURL(blob)}" class="w-full rounded-[1.5rem] border-2 border-white">`;
+                } else {
+                    const data = await response.json();
+                    if (type === 'play') {
+                        resDiv.innerHTML = `<img src="${data.result.thumbnail}" class="w-full rounded-xl mb-2"><p class="text-[10px] font-bold px-2">${data.result.title} - ${data.result.artist}</p><audio controls class="w-full mt-2 h-8 px-2"><source src="${data.result.download}" type="audio/mpeg"></audio>`;
+                    } else if (type === 'tiktok') {
+                        resDiv.innerHTML = `<pre class="text-[10px] text-green-500 font-mono p-3 leading-relaxed">Status: OK\nTitle: ${data.result.title || 'TikTok Content'}</pre>`;
+                    } else {
+                        resDiv.innerHTML = `<pre class="text-[10px] text-green-500 font-mono p-3 leading-relaxed">${type === 'lirik' ? data.result.lirik : JSON.stringify(data, null, 2)}</pre>`;
+                    }
+                }
+                setTimeout(() => toolbar.classList.add('toolbar-show'), 400);
+            } catch(e) { resDiv.innerHTML = `<p class="text-red-500 text-[10px] font-bold text-center py-6 uppercase tracking-widest">Error Connection</p>`; }
+            btn.innerText = 'Execute'; btn.disabled = false;
+        }
+
+        async function copyData(type, mode) {
+            const btn = document.getElementById(`cp-${mode === 'header' ? 'head' : 'curl'}-${type}`);
+            const dataObj = lastResponse[type];
+            if(!dataObj) return;
+            const textToCopy = mode === 'header' ? JSON.stringify(dataObj.headers, null, 2) : `curl -X GET "${dataObj.url}"`;
+            try {
+                await navigator.clipboard.writeText(textToCopy);
+                const oldText = mode === 'header' ? 'Header' : 'cURL';
+                btn.innerText = 'COPIED!';
+                btn.classList.add('copy-animation', 'bg-black', 'text-white', 'border-green-500');
+                btn.classList.remove('bg-white', 'text-gray-400', 'border-gray-100');
+                setTimeout(() => {
+                    btn.innerText = oldText;
+                    btn.classList.remove('copy-animation', 'bg-black', 'text-white', 'border-green-500');
+                    btn.classList.add('bg-white', 'text-gray-400', 'border-gray-100');
+                }, 1500);
+            } catch (err) {}
+        }
+
+        async function checkStatus() {
+            try {
+                const s = Date.now(); await fetch(`${API}/status`);
+                document.getElementById('ping-text').innerText = (Date.now() - s) + 'ms';
+                document.getElementById('status-dot').className = 'w-2.5 h-2.5 bg-green-400 rounded-full animate-pulse';
+                document.getElementById('uptime').innerText = 'STATUS: ONLINE';
+            } catch {
+                document.getElementById('status-dot').className = 'w-2.5 h-2.5 bg-red-500 rounded-full';
+                document.getElementById('uptime').innerText = 'STATUS: OFFLINE';
+            }
+        }
+        setInterval(checkStatus, 5000); checkStatus();
+    </script>
+</body>
+</html>
